@@ -1,0 +1,83 @@
+# HVAC AHU Cost Estimation Web Tool – Project Design
+
+## 1. AHU Components & Pricing Data  
+An AHU is built from modular sections: its **casing (housing)**, **fan/blower**, **heating and cooling coils**, **filters**, **dampers**, plus optional items like **heat-recovery exchangers**, **humidifiers**, and **control/sensor panels**【20†L143-L152】.  For example, the SkillCat HVAC guide lists “Housing, Blower, Cooling coil, Heating coil, Air filter, Dampers, …” as the main AHU components【20†L143-L152】.  In practice, each component carries a base cost.  Industry data show that major cost drivers include the fans/motors, coils, filtration stages, energy-recovery units (ERVs), and control systems【28†L282-L287】.  A general rule of thumb is that standard commercial AHUs cost on the order of **$5–$15 per CFM** of airflow【28†L282-L287】.  (Custom or high-IAQ units can far exceed that.)  
+
+Pricing often comes from vendor catalogs or historical quotes.  For example, a real AHU costing spreadsheet breaks down *each* coil, blower, damper, etc. by material cost and labor, then sums to a total selling price【23†L24-L28】.  In our database we will store each **component category** (e.g. “Filter, HEPA, 610×610×100”) with a *base price* or formula.  Thus the cost engine can sum: *fan cost + coil cost + filter cost + casing cost + … + labor + margin*.  As one document notes, AHU costing typically includes *“Total costs for materials, labor and the selling price of each AHU”*【23†L24-L28】.  We will gather component pricing from manufacturer catalogs or representative sources (e.g. published contractor guides).
+
+## 2. Customer Input Fields & Workflow  
+The **customer-facing UI** should gather project requirements first, then guide component selection.  Key input fields include:  
+- **Airflow requirement (CFM)** – the primary sizing metric.  
+- **External static pressure (in. H₂O)** – system resistance.  
+- **Application/Environment** – e.g. Office, Hospital, Industrial (to infer IAQ needs).  
+- **Climate or Location** – indoor vs outdoor unit, temperature/humidity extremes.  
+- **Filtration level** – e.g. MERV 8, MERV 13, HEPA (affects pressure drop).  
+- **Optional requirements** – need for heat recovery, humidification, noise limits, etc.  
+
+For example, a sample AHU selection input might show *“Air Quantity: 7475 CFM”* and *“External Static Pressure: 2.05 in H₂O”*【26†L427-L433】【26†L437-L440】.  After entering these specs, the user would click “Next” to configure sections. In step 2, allow them to **select components/options**: filter stages (Pre-filter, Fine, HEPA), coil types and rows (chilled water, hot water, DX coils), fan type (centrifugal or plug-fan, number of fans), motor/VFD options, dampers (mixing box for outdoor air), heat recovery (plate or rotary), and controls (basic vs PLC with sensors). 
+
+The workflow is a step-by-step wizard with live cost feedback. For example, one tool’s description notes the user “can select…options from the list…then the software will calculate the total price of unit”【25†L359-L364】.  The final step should **summarize the configured unit** and display a cost breakdown: each selected component with its cost, and a grand total.  Provide buttons to *“Save Quote”*, *“Export PDF”*, etc.  It’s helpful to show a **project dashboard** at login with saved quotes/projects (as one example interface does: “All saved projects can be shown for user at First Screen”【25†L303-L310】).  
+
+**User roles:** Designating roles helps separate views. A *Sales/User* role can run the configurator and generate quotes. An *Admin* role manages data. For instance, a “Sales Administrator” could have privileges to adjust pricing and view all quotes【25†L321-L324】, whereas a technical/engineering admin might edit component specifications.  We should implement a login system so that admins see a different page (the **Pricing Manager**, discussed below) than customers.
+
+## 3. Rules Engine & Costing Logic  
+The **rules engine** maps inputs to a component list and computes costs.  This is largely if-then logic plus lookups.  For example:  
+- If airflow > X, assign a larger fan or multiple fans.  
+- If static pressure is high (long ducts, filters), use a more powerful motor.  
+- If application = Hospital, automatically include HEPA filters.  
+- If the user checks “Heat Recovery”, add an exchanger section.  
+- Choices like VFD motors or premium coils can multiply base costs.  
+
+Documented vendor guidelines confirm this behavior. For instance, high filtration requirements (dust loading, MERV13/HEPA) directly impact fan sizing due to pressure drop【28†L291-L294】.  Conversely, including energy-saving options (ECM fans, heat wheels) adds up-front cost.  The engine should enforce compatibility (e.g. no DX coil in a 100% outdoor unit if chiller is not defined) and flag warnings.
+
+Once the components are decided, apply cost formulas. A simple model is:  
+```
+Total Cost = ∑(Component_Cost) + Labor + Overhead + Margin + Tax  
+```
+Where *Component_Cost* itself = (quantity × base price) + any size multipliers.  For example, *Fan cost* might be `(base fan price) × (CFM/1000)`, *Coil cost* = `(base coil price) × (face area × #rows)`, etc.  Labor could be a rate per section or per cabinet size.  
+
+A typical costing breakdown (inspired by real AHU quotes) is to calculate each section: casing panels, each coil, each fan/motor, filters, dampers, controls panel, etc., then add assembly labor for cutting panels and wiring, plus a profit margin.  The scribd example shows exactly this: *“It also lists components for each AHU like cooling and heating coils, blowers, dampers and costs. Total costs for materials, labor and the selling price of each AHU are calculated.”*【23†L24-L28】. 
+
+We should include scalability: as one source notes, AHU capacity (airflow) is the single biggest cost factor【5†L70-L74】.  In other words, larger CFM = proportionally bigger/heavier components and roughly linear cost scaling.  The cost engine might even apply a CFM-based rule-of-thumb (e.g. `$X per CFM baseline`) as a sanity check. 
+
+## 4. Database Schema & API Design  
+Use a relational database (e.g. PostgreSQL or MySQL).  Key tables might include:  
+- **components**: fields like `id`, `category` (Fan/Coil/Filter/etc.), `model`, `specs`, `base_price`, `description`.  
+- **categories**: (Fan, Filter, Coil, Damper, etc.) for filtering UI.  
+- **users**: with `user_id`, `name`, `email`, `password_hash`, `role` (e.g. admin, sales).  
+- **quotes** (projects): `quote_id`, `user_id`, `date_created`, `project_name`, `total_cost`.  
+- **quote_items**: line items of each quote, linking to `components`, with `quantity`, `unit_cost`, `line_total`.  
+- **pricing_rules**: (optional) e.g. margins, labor rates by category.  
+- **settings**: global values like tax rate or currency.  
+
+The **API endpoints** for a clean separation of front/back might include:  
+- `POST /api/calculate` – Accepts customer inputs (CFM, options, etc.) and returns a cost breakdown JSON.  
+- `GET /api/components` – Lists all available component options/categories (for building selection dropdowns).  
+- `POST /api/quotes` – Saves a finalized quote (with details) to the DB.  
+- `GET /api/quotes/{id}` – Retrieves a saved quote’s details.  
+- `GET /api/quotes` – List all quotes (admin view).  
+- `GET /api/user/projects` – List quotes for the logged-in user.  
+- **Admin-only:** `POST/PUT/DELETE /api/components` – Create or update component entries and prices.  
+
+Secure endpoints so that only admins (role from **users** table) can call the pricing APIs.  For instance, as one design note explains, a “Sales Admin” role can control prices and reports【25†L321-L324】.  We will implement role checks on the backend accordingly. 
+
+## 5. UI Wireframes & Pages  
+**Customer UI:**  
+- **Dashboard (Landing Page):** If the user is logged in (or after entering a project name), show a list/table of their saved quotes/projects (ID, date, name, total cost)【25†L303-L310】. Include a “New Quote” button.  
+- **Step 1 – Project Specs:** A form with fields (Airflow, Static Pressure, Location/Climate, Indoor/Outdoor, Application type). Each field has help text. (E.g. label “Airflow (CFM)”.)  
+- **Step 2 – Configure Sections:** Accordion or tabs for each section: Filters (dropdown for filter grade, qty), Coils (cooling/heating, fluid type, rows), Fans (type, count, motor size, VFD option), Heat Recovery (none/plate/rotary), Dampers (mixing box required Y/N), Controls (basic vs “PLC with sensors”), Casing (single/double skin, insulation). Each choice dynamically affects the cost. Show a running total or “Estimated Price” in a sidebar or header.  
+- **Step 3 – Review & Quote:** Display a summary table listing each selected component, quantity, unit price, and line cost, plus subtotal. Then calculate labor, overhead, margin, tax, and **Grand Total** at the bottom. Provide **Edit** buttons to jump back to any step. Buttons: “Save Quote”, “Download PDF”.
+
+  
+**Admin UI:**  
+- **Component Pricing Page:** A grid/list of all component categories and items. For example, each row: *Component Type*, *Description*, *Base Price*, *Edit*. Admins can change the base price or add new items. There should be a “+ Add Component” button. (This corresponds to the “Sales Admin can control the price” feature【25†L321-L324】.)  
+- **Quote Management Page:** A table of all quotes (quote ID, customer, date, total, status). Clicking a quote opens its detail view (same summary table as customer sees). Admin can also adjust quote (if necessary). Optionally, show an **Audit Log** of price changes.  
+- **User Management:** If needed, a page to create/edit user accounts and assign roles.  
+
+Each page should have a clear, consistent design (labels on left, inputs on right). Use dropdowns for predefined choices (filter types, coil types), numeric inputs for sizes, checkboxes for optional items. The quote summary can mirror an invoice layout. While no graphics are required here, note that pages should be responsive. 
+
+*No external images required.* The design follows standard multi-step form conventions. We will ensure everything is well-labeled and easy to navigate.  
+
+Overall, this plan aligns with how commercial AHU selection tools work: a step-by-step wizard for configuration, and an admin interface for price control【25†L321-L324】. The rules and data model support flexible updates and accurate quoting. Our output will be a complete cost estimation website that meets the uncle’s business needs.
+
+**Sources:** Industry product selection tools and cost guides informed this design. For example, Swegon’s AHU selection software and FläktGroup’s ACON tool handle energy/LCC and configuration【12†L278-L287】【10†L374-L379】, and contractor guides detail component costs【23†L24-L28】【28†L282-L287】. These sources show the typical components and pricing breakdown used in professional AHU quoting.
