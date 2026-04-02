@@ -1,0 +1,280 @@
+import React, { useState, useRef } from 'react'
+import FileManager from './FileManager'
+import Tabs from './Tabs'
+import CodeEditor from './CodeEditor'
+import Terminal from './Terminal'
+import ChatPanel from './ChatPanel'
+import ParticipantsList from './ParticipantsList'
+import { MessageSquare, Play, Copy, Check, Save } from 'lucide-react'
+import { Panel, Group, Separator } from 'react-resizable-panels'
+
+export default function EditorWorkspace({ roomId, username, initialUsers = [], onLeaveRoom, socket }) {
+  const [openFiles, setOpenFiles] = useState([])
+  const [activeFile, setActiveFile] = useState(null)
+  const [isChatOpen, setIsChatOpen] = useState(true)
+  const [copied, setCopied] = useState(false)
+  const [roomUsers, setRoomUsers] = useState(initialUsers)
+  console.log('[DEBUG] EditorWorkspace mount. initialUsers:', initialUsers)
+  const editorRef = useRef(null)
+
+  React.useEffect(() => {
+    const handleUsers = (users) => setRoomUsers(users)
+    socket.on('room:users', handleUsers)
+    return () => socket.off('room:users', handleUsers)
+  }, [socket])
+
+  const handleManualSave = () => {
+    if (activeFile && editorRef.current) {
+      handleSave(activeFile.path, editorRef.current.getValue())
+    }
+  }
+
+  const handleCopyRoomId = () => {
+    navigator.clipboard.writeText(roomId).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+
+  const handleOpenFile = (node) => {
+    if (!openFiles.find(f => f.path === node.path)) {
+      setOpenFiles(prev => [...prev, node])
+    }
+    setActiveFile(node)
+  }
+
+  const handleCloseFile = (path) => {
+    const newOpenFiles = openFiles.filter(f => f.path !== path)
+    setOpenFiles(newOpenFiles)
+    if (activeFile?.path === path) {
+      setActiveFile(newOpenFiles.length > 0 ? newOpenFiles[newOpenFiles.length - 1] : null)
+    }
+  }
+
+  const handleSave = (path, content) => {
+    socket.emit('file:save', path, content, (res) => {
+      if (res && res.error) {
+        console.error('Save error:', res.error)
+        // We don't want to alert on every autosave, but maybe show a subtle indicator or log it
+      }
+    })
+  }
+
+  const handleRunFile = () => {
+    if (!activeFile) return
+    const ext = activeFile.path.split('.').pop().toLowerCase()
+    const safePath = `"${activeFile.path}"`
+    let cmd = ''
+    
+    switch (ext) {
+      case 'js': cmd = `node ${safePath}`; break
+      case 'py': cmd = `python ${safePath}`; break
+      case 'java': cmd = `java ${safePath}`; break
+      case 'cpp': cmd = `g++ ${safePath} -o program.exe ; .\\program.exe`; break
+      case 'c': cmd = `gcc ${safePath} -o program.exe ; .\\program.exe`; break
+      case 'go': cmd = `go run ${safePath}`; break
+      case 'rs': cmd = `rustc ${safePath} -o program.exe ; .\\program.exe`; break
+      default: cmd = `echo "Auto-run not supported for .${ext} files"`; break
+    }
+    
+    // In node-pty, \r simulates pressing Enter
+    socket.emit('terminal:input', cmd + '\r\n')
+  }
+
+  return (
+    <div style={styles.container}>
+      {/* Top Bar */}
+      <div style={styles.topBar}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ fontWeight: '600' }}>Room: </span>
+          <span style={{ color: 'var(--text-accent)' }}>{roomId}</span>
+          <button
+            onClick={handleCopyRoomId}
+            title="Copy Room ID"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              color: copied ? '#4ADE80' : 'var(--text-secondary)',
+              padding: '2px',
+              display: 'flex',
+              alignItems: 'center',
+              transition: 'color 0.2s ease'
+            }}
+          >
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+          </button>
+        </div>
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+          <span>● {username}</span>
+          {activeFile && (
+            <>
+              <button 
+                onClick={handleManualSave}
+                style={{ ...styles.leaveBtn, color: 'var(--text-primary)', borderColor: 'var(--border)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                title="Save File (Ctrl+S)"
+              >
+                <Save size={16} fill="currentColor" /> Save
+              </button>
+              <button 
+                onClick={handleRunFile}
+                style={{ ...styles.leaveBtn, color: '#4ADE80', borderColor: '#4ADE80', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                title="Run File"
+              >
+                <Play size={16} fill="currentColor" /> Run
+              </button>
+            </>
+          )}
+          <button 
+            onClick={() => setIsChatOpen(!isChatOpen)} 
+            style={{ ...styles.leaveBtn, color: 'var(--text-primary)', borderColor: 'var(--border)' }}
+            title="Toggle Chat"
+          >
+            <MessageSquare size={16} />
+          </button>
+          <button onClick={onLeaveRoom} style={styles.leaveBtn}>Leave Room</button>
+        </div>
+      </div>
+
+      {/* Main Layout */}
+      <Group orientation="horizontal" style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        
+        {/* Sidebar */}
+        <Panel id="sidebar" order={1} defaultSize={20} minSize={10} style={{ backgroundColor: 'var(--bg-elevated)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
+          <div style={styles.panelHeader}>File Manager</div>
+          <FileManager socket={socket} onOpenFile={handleOpenFile} />
+          <ParticipantsList users={roomUsers} currentUserId={socket.id} />
+        </Panel>
+
+        <Separator className="panel-resize-handle" />
+
+        {/* Center: Editor + Terminal */}
+        <Panel id="center" order={2} defaultSize={isChatOpen ? 60 : 80} minSize={30}>
+          <Group orientation="vertical">
+            
+            {/* Editor Area */}
+            <Panel id="editor" order={1} defaultSize={70} minSize={20} style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <Tabs 
+                openFiles={openFiles} 
+                activeFile={activeFile} 
+                onSelect={setActiveFile} 
+                onClose={handleCloseFile} 
+              />
+              <div style={{ flex: 1, backgroundColor: '#0A0A14', position: 'relative', display: 'flex', flexDirection: 'column' }}>
+                <CodeEditor 
+                  key={activeFile ? activeFile.path : 'empty'}
+                  roomId={roomId}
+                  file={activeFile}
+                  username={username}
+                  socket={socket}
+                  onSave={handleSave}
+                  editorRef={editorRef}
+                />
+              </div>
+            </Panel>
+
+            <Separator className="panel-resize-handle" />
+
+            {/* Terminal */}
+            <Panel id="terminal" order={2} defaultSize={30} minSize={10} style={{ backgroundColor: 'var(--bg-elevated)', borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
+              <div style={styles.panelHeader}>Terminal</div>
+              <div style={{ flex: 1, padding: '0 1rem', overflow: 'hidden' }}>
+                <Terminal socket={socket} roomId={roomId} />
+              </div>
+            </Panel>
+            
+          </Group>
+        </Panel>
+
+        {/* Chat Panel */}
+        {isChatOpen && (
+          <>
+            <Separator className="panel-resize-handle" />
+            <Panel id="chat" order={3} defaultSize={20} minSize={15} style={{ backgroundColor: 'var(--bg-elevated)', borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
+              <div style={styles.panelHeader}>Chat & Voice</div>
+              <ChatPanel socket={socket} username={username} roomUsers={roomUsers} />
+            </Panel>
+          </>
+        )}
+      </Group>
+    </div>
+  )
+}
+
+const styles = {
+  container: {
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100%',
+    width: '100%'
+  },
+  topBar: {
+    height: '48px',
+    backgroundColor: 'var(--bg-surface)',
+    borderBottom: '1px solid var(--border)',
+    display: 'flex',
+    alignItems: 'center',
+    padding: '0 1rem',
+    zIndex: 10
+  },
+  leaveBtn: {
+    backgroundColor: 'transparent',
+    color: 'var(--danger)',
+    border: '1px solid var(--danger)',
+    padding: '0.25rem 0.75rem',
+    fontSize: '0.875rem'
+  },
+  mainLayout: {
+    display: 'flex',
+    flex: 1,
+    overflow: 'hidden'
+  },
+  sidebar: {
+    width: '250px',
+    backgroundColor: 'var(--bg-surface)',
+    borderRight: '1px solid var(--border)',
+    display: 'flex',
+    flexDirection: 'column'
+  },
+  panelHeader: {
+    padding: '0.5rem 1rem',
+    backgroundColor: 'var(--bg-elevated)',
+    borderBottom: '1px solid var(--border)',
+    fontSize: '0.85rem',
+    fontWeight: '600',
+    color: 'var(--text-secondary)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em'
+  },
+  editorArea: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0
+  },
+  tabsHeader: {
+    display: 'flex',
+    backgroundColor: 'var(--bg-surface)',
+    borderBottom: '1px solid var(--border)',
+  },
+  tab: {
+    padding: '0.5rem 1rem',
+    fontSize: '0.9rem',
+    cursor: 'pointer',
+    color: 'var(--text-secondary)'
+  },
+  terminalPanel: {
+    height: '200px',
+    backgroundColor: 'var(--bg-surface)',
+    borderTop: '1px solid var(--border)',
+    display: 'flex',
+    flexDirection: 'column'
+  },
+  chatPanel: {
+    width: '300px',
+    backgroundColor: 'var(--bg-surface)',
+    borderLeft: '1px solid var(--border)',
+    display: 'flex',
+    flexDirection: 'column'
+  }
+}
