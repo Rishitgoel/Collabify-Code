@@ -79,7 +79,7 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
 
     const doc = new Y.Doc()
     const syncRoom = `${roomId}:${file.path}`
-    const wsUrl = `ws://localhost:3001/yjs`
+    const wsUrl = import.meta.env.VITE_WS_URL || `ws://localhost:3001/yjs`
     
     const provider = new WebsocketProvider(wsUrl, syncRoom, doc)
     providerRef.current = provider

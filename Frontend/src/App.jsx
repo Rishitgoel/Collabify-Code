@@ -4,7 +4,8 @@ import EditorWorkspace from './components/EditorWorkspace'
 import { io } from 'socket.io-client'
 
 // Connect to backend server
-const socket = io('http://localhost:3001')
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+const socket = io(API_URL)
 
 // Global singleton for local handles to ensure stability against React remounts
 const GLOBAL_LOCAL_HANDLES = new Map()
