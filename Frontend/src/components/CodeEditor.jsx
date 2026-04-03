@@ -7,7 +7,7 @@ import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 import { MonacoBinding } from 'y-monaco'
 
-export default function CodeEditor({ roomId, file, username, userColor, onSave, socket, editorRef }) {
+export default function CodeEditor({ roomId, file, username, userColor, onSave, socket, editorRef, theme }) {
   const [editor, setEditor] = useState(null)
   const providerRef = useRef(null)
   const bindingRef = useRef(null)
@@ -31,7 +31,8 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
 
   useEffect(() => {
     if (monaco) {
-      monaco.editor.defineTheme('voidTheme', {
+      // Dark Theme
+      monaco.editor.defineTheme('voidThemeDark', {
         base: 'vs-dark',
         inherit: true,
         rules: [],
@@ -41,9 +42,27 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
           'editorLineNumber.foreground': '#6B6B80'
         }
       })
-      monaco.editor.setTheme('voidTheme')
+
+      // Light Theme
+      monaco.editor.defineTheme('voidThemeLight', {
+        base: 'vs',
+        inherit: true,
+        rules: [],
+        colors: {
+          'editor.background': '#FFFFFF',
+          'editor.lineHighlightBackground': '#F1F3F5',
+          'editorLineNumber.foreground': '#adb5bd'
+        }
+      })
     }
   }, [monaco])
+
+  useEffect(() => {
+    if (monaco) {
+      monaco.editor.setTheme(theme === 'dark' ? 'voidThemeDark' : 'voidThemeLight')
+    }
+  }, [monaco, theme])
+
 
   useEffect(() => {
     if (!file || !editor) return
@@ -134,11 +153,12 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
 
   if (!file) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-void)' }}>
         Select a file to start editing
       </div>
     )
   }
+
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', width: '100%', height: '100%' }}>
@@ -152,8 +172,9 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
         path={file.path}
         height="100%"
         language={getLanguage(file.name)}
-        theme="voidTheme"
+        theme={theme === 'dark' ? 'voidThemeDark' : 'voidThemeLight'}
         onMount={handleEditorDidMount}
+
         options={{
           minimap: { enabled: false },
           wordWrap: 'on',

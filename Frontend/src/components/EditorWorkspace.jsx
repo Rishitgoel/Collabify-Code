@@ -5,10 +5,10 @@ import CodeEditor from './CodeEditor'
 import Terminal from './Terminal'
 import ChatPanel from './ChatPanel'
 import ParticipantsList from './ParticipantsList'
-import { MessageSquare, Play, Copy, Check, Save } from 'lucide-react'
+import { MessageSquare, Play, Copy, Check, Save, Sun, Moon } from 'lucide-react'
 import { Panel, Group, Separator } from 'react-resizable-panels'
 
-export default function EditorWorkspace({ roomId, username, initialUsers = [], onLeaveRoom, socket }) {
+export default function EditorWorkspace({ roomId, username, initialUsers = [], onLeaveRoom, socket, theme, toggleTheme }) {
   const [openFiles, setOpenFiles] = useState([])
   const [activeFile, setActiveFile] = useState(null)
   const [isChatOpen, setIsChatOpen] = useState(true)
@@ -17,6 +17,7 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
   console.log('[DEBUG] EditorWorkspace mount. initialUsers:', initialUsers)
   const editorRef = useRef(null)
 
+  // ... (rest of the hooks and handlers stay the same) ...
   React.useEffect(() => {
     const handleUsers = (users) => setRoomUsers(users)
     socket.on('room:users', handleUsers)
@@ -55,7 +56,6 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
     socket.emit('file:save', path, content, (res) => {
       if (res && res.error) {
         console.error('Save error:', res.error)
-        // We don't want to alert on every autosave, but maybe show a subtle indicator or log it
       }
     })
   }
@@ -77,7 +77,6 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
       default: cmd = `echo "Auto-run not supported for .${ext} files"`; break
     }
     
-    // In node-pty, \r simulates pressing Enter
     socket.emit('terminal:input', cmd + '\r\n')
   }
 
@@ -107,6 +106,16 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
         </div>
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
           <span>● {username}</span>
+          
+          {/* Theme Toggle Button */}
+          <button 
+            onClick={toggleTheme}
+            style={{ ...styles.leaveBtn, color: 'var(--text-primary)', borderColor: 'var(--border)', padding: '0.35rem' }}
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+
           {activeFile && (
             <>
               <button 
@@ -135,6 +144,7 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
           <button onClick={onLeaveRoom} style={styles.leaveBtn}>Leave Room</button>
         </div>
       </div>
+
 
       {/* Main Layout */}
       <Group orientation="horizontal" style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
@@ -169,7 +179,9 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
                   socket={socket}
                   onSave={handleSave}
                   editorRef={editorRef}
+                  theme={theme}
                 />
+
               </div>
             </Panel>
 
@@ -179,8 +191,9 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
             <Panel id="terminal" order={2} defaultSize={30} minSize={10} style={{ backgroundColor: 'var(--bg-elevated)', borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
               <div style={styles.panelHeader}>Terminal</div>
               <div style={{ flex: 1, padding: '0 1rem', overflow: 'hidden' }}>
-                <Terminal socket={socket} roomId={roomId} />
+                <Terminal socket={socket} roomId={roomId} theme={theme} />
               </div>
+
             </Panel>
             
           </Group>

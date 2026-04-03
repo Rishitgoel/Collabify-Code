@@ -166,7 +166,39 @@ io.on('connection', (socket) => {
     })
   }
 
+  socket.on('room:delete', async (roomId, callback) => {
+    try {
+      validateRoomId(roomId)
+      const roomPath = path.join(WORKSPACE_DIR, roomId)
+      
+      // Permanently remove the entire directory from disk
+      if (fs.existsSync(roomPath)) {
+        await fs.remove(roomPath)
+      }
+      
+      // Cleanup in-memory state if room is active
+      if (rooms.has(roomId)) {
+        rooms.delete(roomId)
+      }
+      if (chatHistory.has(roomId)) {
+        chatHistory.delete(roomId)
+      }
+      const ptyProcess = ptys.get(roomId)
+      if (ptyProcess) {
+        try { ptyProcess.kill() } catch (e) {}
+        ptys.delete(roomId)
+      }
+      
+      console.log(`Room ${roomId} permanently deleted from disk and memory.`)
+      if (callback) callback({ success: true })
+    } catch (err) {
+      console.error(`Error deleting room ${roomId}:`, err)
+      if (callback) callback({ error: err.message })
+    }
+  })
+
   socket.on('leave-room', () => {
+
     handleLeave()
   })
 
@@ -217,6 +249,7 @@ io.on('connection', (socket) => {
 
   // Broadcast function to refresh file tree for all clients in the room
   const broadcastFileList = async (roomId) => {
+    if (!roomId) return // Safety check
     const roomPath = path.join(WORKSPACE_DIR, roomId)
     if (fs.existsSync(roomPath)) {
       const tree = await scanDirectory(roomPath, roomPath)
@@ -224,13 +257,15 @@ io.on('connection', (socket) => {
     }
   }
 
+
   socket.on('file:create', async (filePath, content, callback) => {
-    if (!currentRoom) {
+    const roomId = currentRoom
+    if (!roomId) {
       if (callback) callback({ error: 'Not in a room' })
       return
     }
     try {
-      const roomPath = path.join(WORKSPACE_DIR, currentRoom)
+      const roomPath = path.join(WORKSPACE_DIR, roomId)
       const fullPath = validatePath(roomPath, filePath)
       
       // Check total workspace size before adding new content
@@ -247,7 +282,7 @@ io.on('connection', (socket) => {
         }
         await fs.writeFile(fullPath, content)
         // Also update Yjs memory state if currently open in any clients
-        const roomName = `${currentRoom}:${filePath.replace(/\\/g, '/')}`
+        const roomName = `${roomId}:${filePath.replace(/\\/g, '/')}`
         const doc = docs.get(roomName)
         if (doc) {
           const type = doc.getText('monaco')
@@ -257,69 +292,76 @@ io.on('connection', (socket) => {
           })
         }
       }
-      broadcastFileList(currentRoom)
+      await broadcastFileList(roomId)
       if (callback) callback({ success: true })
     } catch (err) {
       if (callback) callback({ error: err.message })
     }
+
   })
 
   socket.on('folder:create', async (folderPath, callback) => {
-    if (!currentRoom) return
+    const roomId = currentRoom
+    if (!roomId) return
     try {
-      const roomPath = path.join(WORKSPACE_DIR, currentRoom)
+      const roomPath = path.join(WORKSPACE_DIR, roomId)
       const fullPath = validatePath(roomPath, folderPath)
       await fs.ensureDir(fullPath)
-      broadcastFileList(currentRoom)
+      await broadcastFileList(roomId)
       if (callback) callback({ success: true })
     } catch (err) {
       if (callback) callback({ error: err.message })
     }
+
   })
 
   socket.on('file:delete', async (targetPath, callback) => {
-    if (!currentRoom) return
+    const roomId = currentRoom
+    if (!roomId) return
     try {
-      const roomPath = path.join(WORKSPACE_DIR, currentRoom)
+      const roomPath = path.join(WORKSPACE_DIR, roomId)
       const fullPath = validatePath(roomPath, targetPath)
       await fs.remove(fullPath)
       
       // CLEAN UP Yjs docs
-      const roomNamePrefix = `${currentRoom}:${targetPath.replace(/\\/g, '/')}`
+      const roomNamePrefix = `${roomId}:${targetPath.replace(/\\/g, '/')}`
       for (const [key, doc] of docs.entries()) {
         if (key === roomNamePrefix || key.startsWith(roomNamePrefix + '/')) {
           docs.delete(key)
         }
       }
 
-      broadcastFileList(currentRoom)
+      await broadcastFileList(roomId)
       if (callback) callback({ success: true })
     } catch (err) {
       if (callback) callback({ error: err.message })
     }
+
   })
 
   socket.on('file:rename', async (oldPath, newPath, callback) => {
-    if (!currentRoom) return
+    const roomId = currentRoom
+    if (!roomId) return
     try {
-      const roomPath = path.join(WORKSPACE_DIR, currentRoom)
+      const roomPath = path.join(WORKSPACE_DIR, roomId)
       const oldFull = validatePath(roomPath, oldPath)
       const newFull = validatePath(roomPath, newPath)
       await fs.move(oldFull, newFull)
 
       // Update Yjs docs map if needed (simplest is clear old ones)
-      const oldPrefix = `${currentRoom}:${oldPath.replace(/\\/g, '/')}`
+      const oldPrefix = `${roomId}:${oldPath.replace(/\\/g, '/')}`
       for (const [key, doc] of docs.entries()) {
         if (key === oldPrefix || key.startsWith(oldPrefix + '/')) {
           docs.delete(key)
         }
       }
 
-      broadcastFileList(currentRoom)
+      await broadcastFileList(roomId)
       if (callback) callback({ success: true })
     } catch (err) {
       if (callback) callback({ error: err.message })
     }
+
   })
 
   socket.on('file:read', async (filePath, callback) => {

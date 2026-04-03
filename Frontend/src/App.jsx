@@ -10,6 +10,21 @@ function App() {
   const [currentView, setCurrentView] = useState('ENTRY') // 'ENTRY' | 'WORKSPACE'
   const [roomData, setRoomData] = useState({ roomId: null, username: null, initialUsers: [] })
   const [isConnected, setIsConnected] = useState(socket.connected)
+  const [isRestoring, setIsRestoring] = useState(true)
+  
+  // Theme state management
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('collabify_theme') || 'dark'
+  })
+
+  useEffect(() => {
+    localStorage.setItem('collabify_theme', theme)
+    document.documentElement.setAttribute('data-theme', theme)
+  }, [theme])
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark')
+  }
 
   useEffect(() => {
     socket.on('connect', () => setIsConnected(true))
@@ -20,15 +35,50 @@ function App() {
     }
   }, [])
 
+  // Auto-rejoin logic
+  useEffect(() => {
+    if (isConnected && currentView === 'ENTRY') {
+      const savedSession = localStorage.getItem('collabify_session')
+      if (savedSession) {
+        try {
+          const { roomId, username } = JSON.parse(savedSession)
+          console.log('[DEBUG] Attempting auto-rejoin:', { roomId, username })
+          
+          socket.emit('join-room', roomId, username, (res) => {
+            if (res.success) {
+              console.log('[DEBUG] Auto-rejoin successful')
+              handleJoinRoom(res.roomId, username, res.users)
+            } else {
+              console.warn('[DEBUG] Auto-rejoin failed:', res.error)
+              localStorage.removeItem('collabify_session')
+            }
+            setIsRestoring(false)
+          })
+        } catch (e) {
+          console.error('Failed to parse saved session', e)
+          localStorage.removeItem('collabify_session')
+          setIsRestoring(false)
+        }
+      } else {
+        setIsRestoring(false)
+      }
+    } else if (isConnected) {
+      // If we are already in workspace, we are not restoring anymore
+      setIsRestoring(false)
+    }
+  }, [isConnected])
+
   const handleJoinRoom = (roomId, username, users) => {
     console.log('[DEBUG] App.handleJoinRoom:', { roomId, username, users })
     setRoomData({ roomId, username, initialUsers: users })
+    localStorage.setItem('collabify_session', JSON.stringify({ roomId, username }))
     setCurrentView('WORKSPACE')
   }
 
   const handleLeaveRoom = () => {
     socket.emit('leave-room')
     setRoomData({ roomId: null, username: null, initialUsers: [] })
+    localStorage.removeItem('collabify_session')
     setCurrentView('ENTRY')
   }
 
@@ -40,8 +90,39 @@ function App() {
         </div>
       )}
       <div style={{ flex: 1, minHeight: 0 }}>
-        {currentView === 'ENTRY' ? (
-          <EntryScreen onJoinRoom={handleJoinRoom} socket={socket} />
+        {isRestoring ? (
+          <div style={{ 
+            height: '100%', 
+            display: 'flex', 
+            flexDirection: 'column', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            gap: '1rem',
+            color: 'var(--text-secondary)'
+          }}>
+            <div className="spinner" style={{ 
+              width: '40px', 
+              height: '40px', 
+              border: '4px solid var(--border)', 
+              borderTop: '4px solid var(--accent)', 
+              borderRadius: '50%',
+              animation: 'spin 1s linear infinite'
+            }} />
+            <p>Restoring your session...</p>
+            <style>{`
+              @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+              }
+            `}</style>
+          </div>
+        ) : currentView === 'ENTRY' ? (
+          <EntryScreen 
+            onJoinRoom={handleJoinRoom} 
+            socket={socket} 
+            theme={theme} 
+            toggleTheme={toggleTheme} 
+          />
         ) : (
           <EditorWorkspace 
             roomId={roomData.roomId} 
@@ -49,11 +130,14 @@ function App() {
             initialUsers={roomData.initialUsers}
             onLeaveRoom={handleLeaveRoom}
             socket={socket}
+            theme={theme}
+            toggleTheme={toggleTheme}
           />
         )}
       </div>
     </div>
   )
 }
+
 
 export default App

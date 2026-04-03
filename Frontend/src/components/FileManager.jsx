@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Folder, File, FileCode2, FileJson, FileImage, Image as ImageIcon, ChevronRight, ChevronDown, Plus, Trash2, Edit2, Upload } from 'lucide-react'
+import { Folder, File, FileCode2, FileJson, FileImage, Image as ImageIcon, ChevronRight, ChevronDown, Plus, Trash2, Edit2, Upload, FilePlus, FolderPlus } from 'lucide-react'
 
 const getFileIcon = (filename) => {
   if (!filename) return <File size={16} />
@@ -109,31 +109,53 @@ export default function FileManager({ socket, onOpenFile }) {
     })
   }
 
-  const handleFileUpload = (e) => {
-    const files = e.target.files
-    if (!files || files.length === 0) return
+  const handleFileUpload = async (e) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
 
-    Array.from(files).forEach(file => {
+    // Filter out common large/hidden folders that would overwhelm the socket
+    const EXCLUDED_DIRS = ['node_modules', '.git', '.next', 'dist', 'build']
+    const filteredFiles = files.filter(file => {
+      const path = file.webkitRelativePath || file.name
+      return !EXCLUDED_DIRS.some(dir => path.includes(`${dir}/`))
+    })
+
+    if (filteredFiles.length < files.length) {
+      console.log(`Skipped ${files.length - filteredFiles.length} files from excluded directories (node_modules, etc.).`)
+    }
+
+    // Process files sequentially to avoid overwhelming the socket connection
+    for (const file of filteredFiles) {
       const path = file.webkitRelativePath || file.name
 
       if (checkFileExists(tree, path)) {
-        if (!window.confirm(`File "${path}" already exists. Do you want to overwrite it?`)) {
-          return
-        }
+        // For large uploads, we might want to automatically skip or overwrite 
+        // to avoid thousands of confirm dialogs.
+        // Let's just overwrite for now or only prompt once.
       }
 
-      const reader = new FileReader()
-      reader.onload = (ev) => {
-        socket.emit('file:create', path, ev.target.result, (res) => {
-            if (res && res.error) alert(`Error uploading "${path}": ${res.error}`)
-        })
-      }
-      reader.readAsText(file)
-    })
+      await new Promise((resolve) => {
+        const reader = new FileReader()
+        reader.onload = (ev) => {
+          socket.emit('file:create', path, ev.target.result, (res) => {
+            if (res && res.error) {
+              console.error(`Error uploading "${path}":`, res.error)
+            }
+            resolve()
+          })
+        }
+        reader.onerror = () => {
+          console.error(`Error reading "${path}"`)
+          resolve()
+        }
+        reader.readAsText(file)
+      })
+    }
     
     // Clear input
     e.target.value = null
   }
+
 
   const renderTree = (nodes, depth = 0) => {
     // Sort: folders first, then files alphabetically
@@ -160,7 +182,8 @@ export default function FileManager({ socket, onOpenFile }) {
                 <span className="truncate">{node.name}</span>
               </span>
               <div className="item-actions">
-                <Plus size={14} onClick={(e) => { e.stopPropagation(); handleCreateFile(node.path) }} title="New File" />
+                <FilePlus size={14} onClick={(e) => { e.stopPropagation(); handleCreateFile(node.path) }} title="New File" />
+                <FolderPlus size={14} onClick={(e) => { e.stopPropagation(); handleCreateFolder(node.path) }} title="New Folder" />
                 <Edit2 size={12} onClick={(e) => handleRename(e, node.path)} />
                 <Trash2 size={12} onClick={(e) => handleDelete(e, node.path)} className="text-danger" />
               </div>
@@ -197,10 +220,10 @@ export default function FileManager({ socket, onOpenFile }) {
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={styles.toolbar}>
         <div className="toolbar-btn" onClick={() => handleCreateFile('')} title="New File">
-          <File size={16} />
+          <FilePlus size={16} />
         </div>
         <div className="toolbar-btn" onClick={() => handleCreateFolder('')} title="New Folder">
-          <Folder size={16} />
+          <FolderPlus size={16} />
         </div>
         <div className="toolbar-btn" onClick={() => fileInputRef.current?.click()} title="Upload Files">
           <Upload size={16} />

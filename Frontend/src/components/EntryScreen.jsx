@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
+import { Sun, Moon, Trash2 } from 'lucide-react'
 
-export default function EntryScreen({ onJoinRoom, socket }) {
+export default function EntryScreen({ onJoinRoom, socket, theme, toggleTheme }) {
   const [username, setUsername] = useState('')
   const [roomId, setRoomId] = useState('')
   const [recentRooms, setRecentRooms] = useState(() => {
@@ -12,6 +13,7 @@ export default function EntryScreen({ onJoinRoom, socket }) {
     }
   })
 
+  // ... rest of the component state/functions ...
   const saveToRecent = (id, user) => {
     try {
       let rooms = [...recentRooms]
@@ -25,6 +27,21 @@ export default function EntryScreen({ onJoinRoom, socket }) {
       localStorage.setItem('collabify_recent_rooms', JSON.stringify(rooms))
     } catch (e) {
       console.error('Failed to save to recent rooms', e)
+    }
+  }
+
+  const handleDeleteRoom = (id, e) => {
+    e.stopPropagation() // Prevent filling the room ID input
+    if (window.confirm(`Permanently delete room ${id} and all its data from the server?`)) {
+      socket.emit('room:delete', id, (res) => {
+        if (res.success) {
+          const updated = recentRooms.filter(r => r.roomId !== id)
+          setRecentRooms(updated)
+          localStorage.setItem('collabify_recent_rooms', JSON.stringify(updated))
+        } else {
+          alert('Failed to delete room from server: ' + res.error)
+        }
+      })
     }
   }
 
@@ -55,7 +72,12 @@ export default function EntryScreen({ onJoinRoom, socket }) {
   }
 
   const clearHistory = () => {
-    if (window.confirm('Are you sure you want to clear your recent rooms history?')) {
+    if (window.confirm('Are you sure you want to PERMANENTLY clear your recent rooms history and delete all their data from the server?')) {
+      // Loop through all recent rooms and delete from backend
+      recentRooms.forEach(room => {
+        socket.emit('room:delete', room.roomId)
+      })
+      
       setRecentRooms([])
       localStorage.removeItem('collabify_recent_rooms')
     }
@@ -64,6 +86,29 @@ export default function EntryScreen({ onJoinRoom, socket }) {
   return (
     <div style={styles.container}>
       <div style={styles.card}>
+        {/* Theme Toggle Button */}
+
+        <button 
+          onClick={toggleTheme}
+          style={{
+            position: 'absolute',
+            top: '1.5rem',
+            right: '1.5rem',
+            backgroundColor: 'var(--bg-elevated)',
+            color: 'var(--text-primary)',
+            padding: '0.5rem',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            transition: 'all 0.2s'
+          }}
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+        </button>
         <h1 style={{ color: 'var(--text-primary)', marginBottom: '0.2rem' }}>Collabify</h1>
         <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem' }}>Real-time collaborative coding</p>
 
@@ -146,18 +191,56 @@ export default function EntryScreen({ onJoinRoom, socket }) {
                     cursor: 'pointer',
                     display: 'flex',
                     justifyContent: 'space-between',
-                    alignItems: 'center'
+                    alignItems: 'center',
+                    transition: 'transform 0.2s, background-color 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = 'var(--bg-surface)'
+                    e.currentTarget.style.transform = 'translateX(4px)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'var(--bg-elevated)'
+                    e.currentTarget.style.transform = 'translateX(0)'
                   }}
                   title="Click to fill details"
                 >
-                  <div>
+                  <div style={{ flex: 1 }}>
                     <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{room.roomId}</div>
                     <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>as {room.username}</div>
                   </div>
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-                    {new Date(room.lastAccessed).toLocaleDateString()}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textAlign: 'right' }}>
+                      {new Date(room.lastAccessed).toLocaleDateString()}
+                    </div>
+                    <button
+                      onClick={(e) => handleDeleteRoom(room.roomId, e)}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        padding: '4px',
+                        borderRadius: '4px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        transition: 'color 0.2s, background-color 0.2s'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.color = 'var(--danger)'
+                        e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.color = 'var(--text-secondary)'
+                        e.currentTarget.style.backgroundColor = 'transparent'
+                      }}
+                      title="Permanently delete from server"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 </div>
+
               ))}
             </div>
           </div>
