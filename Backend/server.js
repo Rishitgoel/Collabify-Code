@@ -56,8 +56,8 @@ const rooms = new Map() // roomId -> { users: Map(socketId -> { username, color 
 const ptys = new Map() // roomId -> pty process
 const chatHistory = new Map() // roomId -> [ { username, message, timestamp, color } ]
 const userColors = ['#F87171', '#FBBF24', '#4ADE80', '#60A5FA', '#818CF8', '#A78BFA', '#F472B6', '#34D399']
-const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
-const MAX_WORKSPACE_SIZE = 50 * 1024 * 1024 // 50MB
+const MAX_FILE_SIZE = 25 * 1024 * 1024 // 25MB
+const MAX_WORKSPACE_SIZE = 500 * 1024 * 1024 // 500MB
 
 /**
  * Validates that a target path is strictly within a base directory.

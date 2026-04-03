@@ -6,11 +6,20 @@ import { io } from 'socket.io-client'
 // Connect to backend server
 const socket = io('http://localhost:3001')
 
+// Global singleton for local handles to ensure stability against React remounts
+const GLOBAL_LOCAL_HANDLES = new Map()
+window.collabifyHandles = GLOBAL_LOCAL_HANDLES
+
 function App() {
   const [currentView, setCurrentView] = useState('ENTRY') // 'ENTRY' | 'WORKSPACE'
   const [roomData, setRoomData] = useState({ roomId: null, username: null, initialUsers: [] })
   const [isConnected, setIsConnected] = useState(socket.connected)
   const [isRestoring, setIsRestoring] = useState(true)
+  
+  // Use a dummy state to trigger UI updates when handles change
+  const [syncCount, setSyncCount] = useState(0)
+
+  // ... (theme state logic) ...
   
   // Theme state management
   const [theme, setTheme] = useState(() => {
@@ -132,6 +141,15 @@ function App() {
             socket={socket}
             theme={theme}
             toggleTheme={toggleTheme}
+            localHandles={GLOBAL_LOCAL_HANDLES}
+            setLocalHandles={(newMap) => {
+              GLOBAL_LOCAL_HANDLES.clear()
+              for (let [key, value] of newMap) {
+                GLOBAL_LOCAL_HANDLES.set(key, value)
+              }
+              setSyncCount(c => c + 1)
+              console.log('[DEBUG] App: Global handles updated, count:', GLOBAL_LOCAL_HANDLES.size)
+            }}
           />
         )}
       </div>

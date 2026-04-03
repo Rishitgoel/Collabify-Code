@@ -5,15 +5,17 @@ import CodeEditor from './CodeEditor'
 import Terminal from './Terminal'
 import ChatPanel from './ChatPanel'
 import ParticipantsList from './ParticipantsList'
-import { MessageSquare, Play, Copy, Check, Save, Sun, Moon } from 'lucide-react'
+import { MessageSquare, Play, Copy, Check, Save, Sun, Moon, HardDrive } from 'lucide-react'
 import { Panel, Group, Separator } from 'react-resizable-panels'
 
-export default function EditorWorkspace({ roomId, username, initialUsers = [], onLeaveRoom, socket, theme, toggleTheme }) {
+export default function EditorWorkspace({ roomId, username, initialUsers = [], onLeaveRoom, socket, theme, toggleTheme, localHandles, setLocalHandles }) {
   const [openFiles, setOpenFiles] = useState([])
   const [activeFile, setActiveFile] = useState(null)
   const [isChatOpen, setIsChatOpen] = useState(true)
   const [copied, setCopied] = useState(false)
   const [roomUsers, setRoomUsers] = useState(initialUsers)
+  const [savedToast, setSavedToast] = useState(null) // { name: string, isLocal: boolean }
+  
   console.log('[DEBUG] EditorWorkspace mount. initialUsers:', initialUsers)
   const editorRef = useRef(null)
 
@@ -26,7 +28,7 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
 
   const handleManualSave = () => {
     if (activeFile && editorRef.current) {
-      handleSave(activeFile.path, editorRef.current.getValue())
+      handleSave(activeFile.path, editorRef.current.getValue(), true)
     }
   }
 
@@ -52,12 +54,70 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
     }
   }
 
-  const handleSave = (path, content) => {
-    socket.emit('file:save', path, content, (res) => {
+  const handleSave = async (path, content, isManual = false) => {
+    let savedLocally = false
+    const normalizedPath = path.trim().replace(/\\/g, '/')
+
+    // 1. Save to Render Server (for Terminal/Collab)
+    socket.emit('file:save', normalizedPath, content, (res) => {
       if (res && res.error) {
-        console.error('Save error:', res.error)
+        console.error('Server save error:', res.error)
+      } else if (isManual && !savedLocally) {
+        setSavedToast({ name: normalizedPath.split('/').pop(), isLocal: false })
+        setTimeout(() => setSavedToast(null), 2000)
       }
     })
+
+    // 2. Save back to Local Disk iff manual save
+    if (!isManual) return
+
+    // Fallback: use global singleton if prop for some reason is stale or empty
+    const handlesMap = (localHandles && localHandles.size > 0) ? localHandles : (window.collabifyHandles || new Map())
+    
+    // Try exact match
+    let handle = handlesMap.get(normalizedPath)
+    
+    // Fallback: Case-insensitive match if exact fails
+    if (!handle) {
+      const keys = Array.from(handlesMap.keys())
+      const lowerPath = normalizedPath.toLowerCase()
+      const match = keys.find(k => k.toLowerCase() === lowerPath)
+      if (match) {
+        handle = handlesMap.get(match)
+        console.log(`[LOCAL] Exact match failed, but found case-insensitive match: ${match}`)
+      }
+    }
+
+    if (handle) {
+      try {
+        const permissionStatus = await handle.queryPermission({ mode: 'readwrite' })
+        if (permissionStatus !== 'granted') {
+           const requested = await handle.requestPermission({ mode: 'readwrite' })
+           if (requested !== 'granted') throw new Error('Permission denied')
+        }
+
+        const writable = await handle.createWritable()
+        await writable.write(content)
+        await writable.close()
+        
+        savedLocally = true
+        setSavedToast({ name: normalizedPath.split('/').pop(), isLocal: true })
+        setTimeout(() => setSavedToast(null), 2000)
+        console.log(`[LOCAL] Success manual saving: ${path}`)
+
+      } catch (err) {
+        console.error(`[LOCAL] Error manual saving: ${path}`, err)
+        alert(`Failed to save to your computer: ${err.message}`)
+      }
+    } else {
+      console.warn(`[LOCAL] No handle found for: ${normalizedPath}`)
+      console.log(`[LOCAL] Available handles in memory:`, Array.from(handlesMap.keys()))
+      
+      // If we see handles in the list but not the one we want, it's definitely a path naming issue
+      if (handlesMap.size > 0) {
+        alert(`Local save skipped: This file was not found in your opened local folder. (Path: ${normalizedPath})`)
+      }
+    }
   }
 
   const handleRunFile = () => {
@@ -83,6 +143,14 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
   return (
     <div style={styles.container}>
       {/* Top Bar */}
+      
+      {/* Toast Notification */}
+      {savedToast && (
+        <div className={`save-toast ${savedToast.isLocal ? 'local' : ''}`}>
+          {savedToast.isLocal ? <HardDrive size={14} /> : <Save size={14} />}
+          Saved {savedToast.name}
+        </div>
+      )}
       <div style={styles.topBar}>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <span style={{ fontWeight: '600' }}>Room: </span>
@@ -152,7 +220,12 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
         {/* Sidebar */}
         <Panel id="sidebar" order={1} defaultSize={20} minSize={10} style={{ backgroundColor: 'var(--bg-elevated)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
           <div style={styles.panelHeader}>File Manager</div>
-          <FileManager socket={socket} onOpenFile={handleOpenFile} />
+          <FileManager 
+            socket={socket} 
+            onOpenFile={handleOpenFile} 
+            localHandles={localHandles}
+            setLocalHandles={setLocalHandles}
+          />
           <ParticipantsList users={roomUsers} currentUserId={socket.id} />
         </Panel>
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Folder, File, FileCode2, FileJson, FileImage, Image as ImageIcon, ChevronRight, ChevronDown, Plus, Trash2, Edit2, Upload, FilePlus, FolderPlus } from 'lucide-react'
+import { Folder, File, FileCode2, FileJson, FileImage, Image as ImageIcon, ChevronRight, ChevronDown, Plus, Trash2, Edit2, Upload, FilePlus, FolderPlus, FolderOpen } from 'lucide-react'
 
 const getFileIcon = (filename) => {
   if (!filename) return <File size={16} />
@@ -24,11 +24,15 @@ const getFileIcon = (filename) => {
   }
 }
 
-export default function FileManager({ socket, onOpenFile }) {
+export default function FileManager({ socket, onOpenFile, localHandles, setLocalHandles }) {
   const [tree, setTree] = useState([])
   const [expandedFolders, setExpandedFolders] = useState(new Set(['']))
+  const [isSyncing, setIsSyncing] = useState(false)
   const fileInputRef = useRef(null)
   const folderInputRef = useRef(null)
+  const currentDirHandleRef = useRef(null)
+
+  const EXCLUDED_DIRS = ['node_modules', '.git', '.next', 'dist', 'build', 'target', 'vendor', '__pycache__', '.vercel', '.idea', '.vscode', 'out', 'coverage', 'venv', 'env']
 
   useEffect(() => {
     socket.emit('file:list', (initialTree) => {
@@ -44,12 +48,87 @@ export default function FileManager({ socket, onOpenFile }) {
     }
   }, [socket])
 
+  const handleOpenLocalFolder = async () => {
+    if (!('showDirectoryPicker' in window)) {
+      alert('Your browser does not support the File System Access API. Please use Chrome or Edge.')
+      return
+    }
+
+    try {
+      const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' })
+      currentDirHandleRef.current = dirHandle
+      await handleResync()
+      alert(`Successfully synced local folder: ${dirHandle.name}`)
+    } catch (err) {
+      setIsSyncing(false)
+      if (err.name !== 'AbortError') {
+        console.error('Error opening local folder:', err)
+        alert('Failed to open local folder.')
+      }
+    }
+  }
+
+  const handleResync = async () => {
+    if (!currentDirHandleRef.current) return
+    
+    setIsSyncing(true)
+    const newHandles = new Map()
+
+    try {
+      const scanFolder = async (handle, relativePath = '') => {
+        for await (const entry of handle.values()) {
+          const entryPath = (relativePath ? `${relativePath}/${entry.name}` : entry.name).trim().replace(/\\/g, '/')
+          
+          if (entry.kind === 'directory') {
+            if (EXCLUDED_DIRS.includes(entry.name)) continue
+            await new Promise((resolve) => socket.emit('folder:create', entryPath, () => resolve()))
+            await scanFolder(entry, entryPath)
+          } else {
+            newHandles.set(entryPath, entry)
+            
+            // Read content and sync to backend
+            const file = await entry.getFile()
+            const content = await file.text()
+            await new Promise((resolve) => socket.emit('file:create', entryPath, content, () => resolve()))
+          }
+        }
+      }
+
+      await scanFolder(currentDirHandleRef.current)
+      setLocalHandles(newHandles)
+      console.log(`[LOCAL] Sync complete. Total handles: ${newHandles.size}`)
+    } catch (err) {
+      console.error('[LOCAL] Sync error:', err)
+      alert('Sync failed. Please ensure you have granted permissions.')
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
   const checkFileExists = (nodes, pathToCheck) => {
     for (const node of nodes) {
       if (node.path === pathToCheck) return true
       if (node.children && checkFileExists(node.children, pathToCheck)) return true
     }
     return false
+  }
+
+  const getOrCreateLocalHandle = async (fullPath, type = 'file') => {
+    if (!currentDirHandleRef.current) return null
+    const parts = fullPath.split('/').filter(p => p.length > 0)
+    let currentDir = currentDirHandleRef.current
+    
+    // Traverse to the parent directory
+    for (let i = 0; i < parts.length - 1; i++) {
+      currentDir = await currentDir.getDirectoryHandle(parts[i], { create: true })
+    }
+    
+    const name = parts[parts.length - 1]
+    if (type === 'directory') {
+      return await currentDir.getDirectoryHandle(name, { create: true })
+    } else {
+      return await currentDir.getFileHandle(name, { create: true })
+    }
   }
 
   const toggleFolder = (folderPath) => {
@@ -62,38 +141,96 @@ export default function FileManager({ socket, onOpenFile }) {
     setExpandedFolders(newExpanded)
   }
 
-  const handleCreateFile = (basePath = '') => {
+  const handleCreateFile = async (basePath = '') => {
     const name = prompt('Enter file name:')
     if (!name) return
-    const fullPath = basePath ? `${basePath}/${name}` : name
+    const fullPath = (basePath ? `${basePath}/${name}` : name).trim().replace(/\\/g, '/')
+    
     if (checkFileExists(tree, fullPath)) {
       alert(`File "${fullPath}" already exists!`)
       return
     }
+
+    // 1. Create on Server
     socket.emit('file:create', fullPath, '', (res) => {
       if (res && res.error) alert(`Error creating file: ${res.error}`)
     })
+
+    // 2. Create on Local Disk if workspace is open
+    if (currentDirHandleRef.current) {
+      try {
+        const handle = await getOrCreateLocalHandle(fullPath, 'file')
+        if (handle) {
+          const newHandles = new Map(localHandles)
+          newHandles.set(fullPath, handle)
+          setLocalHandles(newHandles)
+          console.log(`[LOCAL] Mirrored creation for: ${fullPath}`)
+        }
+      } catch (err) {
+        console.error('[LOCAL] Mirroring failed for creation:', err)
+      }
+    }
   }
 
-  const handleCreateFolder = (basePath = '') => {
+  const handleCreateFolder = async (basePath = '') => {
     const name = prompt('Enter folder name:')
     if (!name) return
-    const fullPath = basePath ? `${basePath}/${name}` : name
+    const fullPath = (basePath ? `${basePath}/${name}` : name).trim().replace(/\\/g, '/')
+    
     if (checkFileExists(tree, fullPath)) {
       alert(`Folder "${fullPath}" already exists!`)
       return
     }
+
+    // 1. Create on Server
     socket.emit('folder:create', fullPath, (res) => {
-        if (res && res.error) alert(`Error creating folder: ${res.error}`)
+      if (res && res.error) alert(`Error creating folder: ${res.error}`)
     })
+
+    // 2. Create on Local Disk if workspace is open
+    if (currentDirHandleRef.current) {
+      try {
+        await getOrCreateLocalHandle(fullPath, 'directory')
+        console.log(`[LOCAL] Mirrored folder creation for: ${fullPath}`)
+        // We don't need to store directory handles in localHandles currently, 
+        // as handleSave only needs file handles.
+      } catch (err) {
+        console.error('[LOCAL] Mirroring failed for folder creation:', err)
+      }
+    }
   }
 
-  const handleDelete = (e, path) => {
+  const handleDelete = async (e, path) => {
     e.stopPropagation()
     if (confirm(`Are you sure you want to delete ${path}?`)) {
+      // 1. Delete from Server
       socket.emit('file:delete', path, (res) => {
         if (res && res.error) alert(`Error deleting: ${res.error}`)
       })
+
+      // 2. Delete from Local Disk if open
+      if (currentDirHandleRef.current) {
+        try {
+          const parts = path.split('/').filter(p => p.length > 0)
+          let currentDir = currentDirHandleRef.current
+          
+          // Traverse to the parent directory
+          for (let i = 0; i < parts.length - 1; i++) {
+            currentDir = await currentDir.getDirectoryHandle(parts[i])
+          }
+          
+          const name = parts[parts.length - 1]
+          await currentDir.removeEntry(name, { recursive: true })
+          
+          // Update handle map
+          const newHandles = new Map(localHandles)
+          newHandles.delete(path)
+          setLocalHandles(newHandles)
+          console.log(`[LOCAL] Mirrored deletion for: ${path}`)
+        } catch (err) {
+          console.error('[LOCAL] Mirroring failed for deletion:', err)
+        }
+      }
     }
   }
 
@@ -114,7 +251,6 @@ export default function FileManager({ socket, onOpenFile }) {
     if (files.length === 0) return
 
     // Filter out common large/hidden folders that would overwhelm the socket
-    const EXCLUDED_DIRS = ['node_modules', '.git', '.next', 'dist', 'build']
     const filteredFiles = files.filter(file => {
       const path = file.webkitRelativePath || file.name
       return !EXCLUDED_DIRS.some(dir => path.includes(`${dir}/`))
@@ -129,9 +265,7 @@ export default function FileManager({ socket, onOpenFile }) {
       const path = file.webkitRelativePath || file.name
 
       if (checkFileExists(tree, path)) {
-        // For large uploads, we might want to automatically skip or overwrite 
-        // to avoid thousands of confirm dialogs.
-        // Let's just overwrite for now or only prompt once.
+        // Overwrite or skip logic
       }
 
       await new Promise((resolve) => {
@@ -158,7 +292,6 @@ export default function FileManager({ socket, onOpenFile }) {
 
 
   const renderTree = (nodes, depth = 0) => {
-    // Sort: folders first, then files alphabetically
     const sorted = [...nodes].sort((a, b) => {
       if (a.type === b.type) return a.name.localeCompare(b.name)
       return a.type === 'folder' ? -1 : 1
@@ -228,9 +361,25 @@ export default function FileManager({ socket, onOpenFile }) {
         <div className="toolbar-btn" onClick={() => fileInputRef.current?.click()} title="Upload Files">
           <Upload size={16} />
         </div>
-        <div className="toolbar-btn" onClick={() => folderInputRef.current?.click()} title="Upload Folder">
-          <Folder size={16} /><Upload size={10} style={{ position: 'absolute', bottom: 4, right: 4 }} />
+        <div 
+           className={`toolbar-btn ${isSyncing ? 'pulse' : ''}`} 
+           onClick={handleOpenLocalFolder} 
+           title="Open Local Workspace (WOW Factor)"
+           style={{ color: 'var(--accent)', border: '1px solid var(--accent-transparent)' }}
+        >
+           <FolderOpen size={16} />
         </div>
+
+        {currentDirHandleRef.current && (
+          <div 
+            className="toolbar-btn" 
+            onClick={handleResync} 
+            title="Re-sync Local Folder"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <Upload size={16} className={isSyncing ? 'spin' : ''} />
+          </div>
+        )}
         <input 
           type="file" 
           multiple 
@@ -238,18 +387,14 @@ export default function FileManager({ socket, onOpenFile }) {
           style={{ display: 'none' }} 
           onChange={handleFileUpload} 
         />
-        <input 
-          type="file" 
-          webkitdirectory="true" 
-          directory="true" 
-          multiple 
-          ref={folderInputRef} 
-          style={{ display: 'none' }} 
-          onChange={handleFileUpload} 
-        />
       </div>
       <div style={styles.treeContainer}>
-        {tree.length === 0 ? (
+        {isSyncing ? (
+           <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--accent)' }}>
+             <div className="spinner-small" style={{ margin: '0 auto 1rem' }} />
+             Syncing local project...
+           </div>
+        ) : tree.length === 0 ? (
            <div style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.85rem', textAlign: 'center' }}>
              Workspace is empty. Create or upload a file.
            </div>

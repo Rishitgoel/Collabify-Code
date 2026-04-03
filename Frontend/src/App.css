@@ -199,3 +199,59 @@ a:hover {
 .panel-resize-handle[data-resize-handle-active] {
   background-color: var(--accent);
 }
+
+/* Animations & Feedback */
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(123, 97, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(123, 97, 255, 0); }
+}
+
+.pulse {
+  animation: pulse 2s infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spinner-small {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.save-toast {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: var(--bg-elevated);
+  color: var(--success);
+  padding: 0.75rem 1.25rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--success);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  z-index: 9999;
+  animation: toast-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  backdrop-filter: blur(8px);
+}
+
+.save-toast.local {
+  border-color: var(--success);
+  background-color: rgba(74, 222, 128, 0.1);
+  color: var(--success);
+}
+
+@keyframes toast-in {
+  from { transform: translate(-50%, 20px); opacity: 0; }
+  to { transform: translate(-50%, 0); opacity: 1; }
+}

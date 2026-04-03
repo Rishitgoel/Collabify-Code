@@ -14,6 +14,12 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
   const [contentLoaded, setContentLoaded] = useState(false)
   const monaco = useMonaco()
 
+  // Use a ref for onSave to avoid stale closure in Monaco commands
+  const onSaveRef = useRef(onSave)
+  useEffect(() => {
+    onSaveRef.current = onSave
+  }, [onSave])
+
   // Define language from extension
   const getLanguage = (filename) => {
     if (!filename) return 'javascript'
@@ -72,24 +78,18 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
     if (providerRef.current) providerRef.current.destroy()
 
     const doc = new Y.Doc()
-    // The provider room name is roomId + file path, so each file has its own sync room
     const syncRoom = `${roomId}:${file.path}`
-    
     const wsUrl = `ws://localhost:3001/yjs`
     
-    // Create connection
     const provider = new WebsocketProvider(wsUrl, syncRoom, doc)
     providerRef.current = provider
 
-    // Set awareness (cursor and user presence)
     provider.awareness.setLocalStateField('user', {
       name: username,
       color: userColor || '#7B61FF'
     })
 
     const type = doc.getText('monaco')
-    
-    // Add binding
     const binding = new MonacoBinding(
       type,
       editor.getModel(),
@@ -98,16 +98,10 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
     )
     bindingRef.current = binding
 
-    // When the provider loads, check if the doc is empty. If it is, and we have file content from disk, load it.
-    // However, Yjs sync is better initialized from the backend. For simplicity, we assume
-    // the backend doesn't hold Yjs state on disk directly, we just read from disk once if Yjs is empty?
-    // In our disk persistence architecture, the first person to open the file should populate it 
-    // from disk if the Yjs doc is empty.
     let isFirstLoad = true
     provider.on('sync', (isSynced) => {
       if (isSynced && isFirstLoad) {
         if (type.length === 0) {
-          // fetch current disk content
           socket.emit('file:read', file.path, (res) => {
             if (res && res.content && type.length === 0) {
               type.insert(0, res.content)
@@ -135,19 +129,21 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
       editorRef.current = editorInstance
     }
     
-    // Add Cmd/Ctrl+S action
     editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-      onSave(file.path, editorInstance.getValue())
+      if (onSaveRef.current) {
+        onSaveRef.current(file.path, editorInstance.getValue(), true)
+      }
     })
 
-    // Auto-save logic
     editorInstance.onDidChangeModelContent(() => {
       if (autosaveTimeoutRef.current) {
         clearTimeout(autosaveTimeoutRef.current)
       }
       autosaveTimeoutRef.current = setTimeout(() => {
-        onSave(file.path, editorInstance.getValue())
-      }, 3000) // 3 seconds auto-save
+        if (onSaveRef.current) {
+          onSaveRef.current(file.path, editorInstance.getValue(), false)
+        }
+      }, 3000)
     })
   }
 
@@ -159,7 +155,6 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
     )
   }
 
-
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', width: '100%', height: '100%' }}>
       {!contentLoaded && (
@@ -168,13 +163,12 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
         </div>
       )}
       <Editor
-        key={file.path /* Force remount for completely clean state isolation */}
+        key={file.path}
         path={file.path}
         height="100%"
         language={getLanguage(file.name)}
         theme={theme === 'dark' ? 'voidThemeDark' : 'voidThemeLight'}
         onMount={handleEditorDidMount}
-
         options={{
           minimap: { enabled: false },
           wordWrap: 'on',
