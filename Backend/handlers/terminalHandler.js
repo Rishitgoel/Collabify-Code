@@ -19,12 +19,17 @@ export default function registerTerminalHandlers(io, socket) {
             throw new Error('Room workspace does not exist.')
         }
 
+        const terminalEnv = { ...process.env }
+        // Force the terminal environment into development mode so commands like 
+        // `npm install` don't skip devDependencies (which causes missing packages like vite)
+        terminalEnv.NODE_ENV = 'development'
+
         const ptyProcess = pty.spawn(shell, [], {
           name: 'xterm-color',
           cols: 80,
           rows: 24,
           cwd: roomPath,
-          env: process.env,
+          env: terminalEnv,
           useConpty: true 
         })
 
