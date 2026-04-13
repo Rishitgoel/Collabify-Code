@@ -143,7 +143,7 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
         if (onSaveRef.current) {
           onSaveRef.current(file.path, editorInstance.getValue(), false)
         }
-      }, 3000)
+      }, 1000) // Lowered from 3000ms for faster updates
     })
   }
 

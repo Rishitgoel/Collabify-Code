@@ -10,10 +10,12 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
+    "dotenv": "^17.4.1",
     "express": "^4.19.2",
     "fs-extra": "^11.2.0",
     "nanoid": "^5.0.7",
     "node-pty": "^1.0.0",
+    "simple-git": "^3.35.2",
     "socket.io": "^4.7.5",
     "y-websocket": "^2.0.4",
     "yjs": "^13.6.14"

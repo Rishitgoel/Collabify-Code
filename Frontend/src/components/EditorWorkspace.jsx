@@ -5,7 +5,8 @@ import CodeEditor from './CodeEditor'
 import Terminal from './Terminal'
 import ChatPanel from './ChatPanel'
 import ParticipantsList from './ParticipantsList'
-import { MessageSquare, Play, Copy, Check, Save, Sun, Moon, HardDrive } from 'lucide-react'
+import GitManager from './GitManager'
+import { MessageSquare, Play, Copy, Check, Save, Sun, Moon, HardDrive, Folder, GitBranch, Github } from 'lucide-react'
 import { Panel, Group, Separator } from 'react-resizable-panels'
 
 export default function EditorWorkspace({ roomId, username, initialUsers = [], onLeaveRoom, socket, theme, toggleTheme, localHandles, setLocalHandles }) {
@@ -15,15 +16,68 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
   const [copied, setCopied] = useState(false)
   const [roomUsers, setRoomUsers] = useState(initialUsers)
   const [savedToast, setSavedToast] = useState(null) // { name: string, isLocal: boolean }
+  const [activeSidebarTab, setActiveSidebarTab] = useState('files')
   
   console.log('[DEBUG] EditorWorkspace mount. initialUsers:', initialUsers)
   const editorRef = useRef(null)
 
   // ... (rest of the hooks and handlers stay the same) ...
+  const [githubToken, setGithubToken] = useState(localStorage.getItem('githubToken') || '')
+  const BACKEND_URL = socket.io.uri || 'http://localhost:3001'
+
+  React.useEffect(() => {
+    const handleMessage = (event) => {
+      const expectedOrigin = new URL(BACKEND_URL).origin
+      if (event.origin !== expectedOrigin) return
+
+      if (event.data && event.data.type === 'GITHUB_TOKEN') {
+        setGithubToken(event.data.payload)
+        localStorage.setItem('githubToken', event.data.payload)
+      }
+    }
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [BACKEND_URL])
+
+  const handleGitHubLogin = () => {
+    const width = 500
+    const height = 600
+    const left = window.screen.width / 2 - width / 2
+    const top = window.screen.height / 2 - height / 2
+    window.open(`${BACKEND_URL}/auth/github`, 'github-oauth', `width=${width},height=${height},top=${top},left=${left}`)
+  }
+
   React.useEffect(() => {
     const handleUsers = (users) => setRoomUsers(users)
+    
+    const handleFileDeleted = (deletedPath) => {
+      setOpenFiles(prevOpen => {
+        const remaining = prevOpen.filter(f => f.path !== deletedPath && !f.path.startsWith(deletedPath + '/'))
+        
+        setActiveFile(prevActive => {
+           if (prevActive && (prevActive.path === deletedPath || prevActive.path.startsWith(deletedPath + '/'))) {
+               return remaining.length > 0 ? remaining[remaining.length - 1] : null
+           }
+           return prevActive
+        })
+        
+        return remaining
+      })
+    }
+    
+    const handleFileRenamed = ({ oldPath, newPath }) => {
+      // Simplest approach: close the old tab so they can reopen the new one
+      handleFileDeleted(oldPath)
+    }
+
     socket.on('room:users', handleUsers)
-    return () => socket.off('room:users', handleUsers)
+    socket.on('file:deleted', handleFileDeleted)
+    socket.on('file:renamed', handleFileRenamed)
+    return () => {
+      socket.off('room:users', handleUsers)
+      socket.off('file:deleted', handleFileDeleted)
+      socket.off('file:renamed', handleFileRenamed)
+    }
   }, [socket])
 
   const handleManualSave = () => {
@@ -219,13 +273,53 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
         
         {/* Sidebar */}
         <Panel id="sidebar" order={1} defaultSize={20} minSize={10} style={{ backgroundColor: 'var(--bg-elevated)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
-          <div style={styles.panelHeader}>File Manager</div>
-          <FileManager 
-            socket={socket} 
-            onOpenFile={handleOpenFile} 
-            localHandles={localHandles}
-            setLocalHandles={setLocalHandles}
-          />
+          <div style={{...styles.panelHeader, display: 'flex', gap: '0', padding: '0'}}>
+            <button 
+              style={{ flex: 1, padding: '0.5rem', background: 'transparent', border: 'none', borderBottom: activeSidebarTab === 'files' ? '2px solid var(--accent)' : '2px solid transparent', color: activeSidebarTab === 'files' ? 'var(--text-primary)' : 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', fontWeight: 'bold' }}
+              onClick={() => setActiveSidebarTab('files')}
+            ><Folder size={14}/> Files</button>
+            <button 
+              style={{ flex: 1, padding: '0.5rem', background: 'transparent', border: 'none', borderBottom: activeSidebarTab === 'git' ? '2px solid var(--accent)' : '2px solid transparent', color: activeSidebarTab === 'git' ? 'var(--text-primary)' : 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', fontWeight: 'bold' }}
+              onClick={() => setActiveSidebarTab('git')}
+            ><GitBranch size={14}/> Git</button>
+          </div>
+          
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {activeSidebarTab === 'files' ? (
+              <FileManager 
+                socket={socket} 
+                onOpenFile={handleOpenFile} 
+                localHandles={localHandles}
+                setLocalHandles={setLocalHandles}
+              />
+            ) : (
+              <GitManager socket={socket} githubToken={githubToken} />
+            )}
+          </div>
+          
+          <div style={{ padding: githubToken ? '0.5rem 1rem' : '1rem', borderTop: '1px solid var(--border)', backgroundColor: 'var(--bg-surface)' }}>
+            {githubToken ? (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontSize: '0.8rem', color: '#4ADE80', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Check size={14} /> Signed in (GitHub)
+                </div>
+                <button 
+                  onClick={() => { setGithubToken(''); localStorage.removeItem('githubToken'); }} 
+                  style={{ background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border)', padding: '2px 6px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem' }}
+                >
+                  Sign out
+                </button>
+              </div>
+            ) : (
+              <button 
+                onClick={handleGitHubLogin}
+                style={{ width: '100%', padding: '0.5rem', backgroundColor: '#24292e', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', fontWeight: 'bold' }}
+              >
+                <Github size={16} /> Sign in with GitHub
+              </button>
+            )}
+          </div>
+
           <ParticipantsList users={roomUsers} currentUserId={socket.id} />
         </Panel>
 

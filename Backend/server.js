@@ -10,13 +10,76 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import pty from 'node-pty'
 import os from 'os'
+import simpleGit from 'simple-git'
+import dotenv from 'dotenv'
 
+dotenv.config()
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const app = express()
 app.use(cors())
 
+// == GITHUB OAUTH ==
+app.get('/auth/github', (req, res) => {
+  const redirect_uri = process.env.GITHUB_CALLBACK_URL || 'http://localhost:3001/auth/github/callback'
+  const client_id = process.env.GITHUB_CLIENT_ID
+  
+  if (!client_id) {
+    return res.status(500).send('GITHUB_CLIENT_ID is not configured in the backend .env file')
+  }
+  
+  const scope = 'repo'
+  res.redirect(`https://github.com/login/oauth/authorize?client_id=${client_id}&redirect_uri=${redirect_uri}&scope=${scope}`)
+})
+
+app.get('/auth/github/callback', async (req, res) => {
+  const code = req.query.code
+  const client_id = process.env.GITHUB_CLIENT_ID
+  const client_secret = process.env.GITHUB_CLIENT_SECRET
+  
+  if (!code) return res.status(400).send('No code provided by GitHub')
+
+  try {
+    const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        client_id,
+        client_secret,
+        code
+      })
+    })
+    const data = await tokenResponse.json()
+    const token = data.access_token
+    const scope = data.scope
+    const tokenType = data.token_type
+    
+    console.log('[GitHub OAuth] Token received. Type:', tokenType, '| Scopes:', scope)
+
+    if (token) {
+      res.send(`
+        <html>
+          <head><title>GitHub Auth Success</title></head>
+          <body>
+            <p>Authentication successful! Closing window...</p>
+            <script>
+              window.opener.postMessage({ type: 'GITHUB_TOKEN', payload: '${token}' }, '*');
+              window.close();
+            </script>
+          </body>
+        </html>
+      `)
+    } else {
+      res.status(400).send('Failed to retrieve token: ' + JSON.stringify(data))
+    }
+  } catch (error) {
+    res.status(500).send('Server Error: ' + error.message)
+  }
+})
 const server = http.createServer(app)
 
 // Socket.IO for room management, terminal, chat, and file operations
@@ -331,6 +394,7 @@ io.on('connection', (socket) => {
         }
       }
 
+      io.to(roomId).emit('file:deleted', targetPath)
       await broadcastFileList(roomId)
       if (callback) callback({ success: true })
     } catch (err) {
@@ -356,6 +420,7 @@ io.on('connection', (socket) => {
         }
       }
 
+      io.to(roomId).emit('file:renamed', { oldPath, newPath })
       await broadcastFileList(roomId)
       if (callback) callback({ success: true })
     } catch (err) {
@@ -388,6 +453,7 @@ io.on('connection', (socket) => {
       }
 
       await fs.writeFile(fullPath, content)
+      io.to(currentRoom).emit('file:saved', { path: filePath }) // Broadcast that a file was modified
       if (callback) callback({ success: true })
     } catch (err) {
       if (callback) callback({ error: err.message })
@@ -417,6 +483,202 @@ io.on('connection', (socket) => {
     }
     return results
   }
+
+  // == GIT EVENTS ==
+
+  // Helper: strip any embedded credentials from a git remote URL
+  function stripCredentialsFromUrl(url) {
+    try {
+      const parsed = new URL(url)
+      parsed.username = ''
+      parsed.password = ''
+      return parsed.toString()
+    } catch {
+      return url
+    }
+  }
+
+  // Helper: ensure the origin remote URL has no embedded credentials
+  async function sanitizeRemoteUrl(git) {
+    try {
+      const remotes = await git.getRemotes(true)
+      const origin = remotes.find(r => r.name === 'origin')
+      if (origin) {
+        const cleanUrl = stripCredentialsFromUrl(origin.refs.push)
+        if (cleanUrl !== origin.refs.push) {
+          await git.remote(['set-url', 'origin', cleanUrl])
+          console.log('[Git] Cleaned embedded credentials from remote URL')
+        }
+      }
+    } catch (_) {}
+  }
+
+  socket.on('git:clone', async (repoUrl, githubToken, callback) => {
+    if (!currentRoom) return callback({ error: 'Not in a room' })
+    try {
+      const roomPath = path.join(WORKSPACE_DIR, currentRoom)
+      const git = simpleGit(roomPath)
+      
+      if (githubToken) {
+        const authHeader = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${githubToken}`).toString('base64')}`
+        await git.addConfig('http.https://github.com/.extraheader', authHeader, false, 'global')
+      }
+      
+      await git.clone(repoUrl, '.')
+
+      if (githubToken) {
+        try { await git.raw(['config', '--global', '--unset', 'http.https://github.com/.extraheader']) } catch (_) {}
+      }
+
+      await broadcastFileList(currentRoom)
+      callback({ success: true })
+    } catch (err) {
+      try {
+        const git2 = simpleGit(path.join(WORKSPACE_DIR, currentRoom))
+        await git2.raw(['config', '--global', '--unset', 'http.https://github.com/.extraheader'])
+      } catch (_) {}
+      console.error(err)
+      callback({ error: err.message })
+    }
+  })
+
+  socket.on('git:status', async (callback) => {
+    if (!currentRoom) return callback({ error: 'Not in a room' })
+    try {
+      const roomPath = path.join(WORKSPACE_DIR, currentRoom)
+      const git = simpleGit(roomPath)
+      
+      const isRepo = await git.checkIsRepo('root')
+      if (!isRepo) return callback({ isRepo: false })
+
+      await sanitizeRemoteUrl(git)
+
+      const status = await git.status()
+      callback({ isRepo: true, status })
+    } catch (err) {
+      callback({ error: err.message })
+    }
+  })
+
+  socket.on('git:add', async (files, callback) => {
+    if (!currentRoom) return callback({ error: 'Not in a room' })
+    try {
+      const roomPath = path.join(WORKSPACE_DIR, currentRoom)
+      const git = simpleGit(roomPath)
+      const isRepo = await git.checkIsRepo('root')
+      if (!isRepo) return callback({ error: 'Not a git repository.' })
+      
+      await git.add(files)
+      callback({ success: true })
+    } catch (err) {
+      callback({ error: err.message })
+    }
+  })
+
+  socket.on('git:unstage', async (file, callback) => {
+    if (!currentRoom) return callback({ error: 'Not in a room' })
+    try {
+      const roomPath = path.join(WORKSPACE_DIR, currentRoom)
+      const git = simpleGit(roomPath)
+      const isRepo = await git.checkIsRepo('root')
+      if (!isRepo) return callback({ error: 'Not a git repository.' })
+      
+      await git.reset(['--', file])
+      callback({ success: true })
+    } catch (err) {
+      callback({ error: err.message })
+    }
+  })
+
+  socket.on('git:commit', async (message, callback) => {
+    if (!currentRoom) return callback({ error: 'Not in a room' })
+    try {
+      const roomPath = path.join(WORKSPACE_DIR, currentRoom)
+      const git = simpleGit(roomPath)
+      const isRepo = await git.checkIsRepo('root')
+      if (!isRepo) return callback({ error: 'Not a git repository.' })
+      
+      if (!message || !message.trim()) {
+        return callback({ error: 'Commit message cannot be empty.' })
+      }
+
+      await git.addConfig('user.name', currentUser?.username || 'Collabify User')
+      await git.addConfig('user.email', `${currentUser?.username || 'user'}@collabify.local`)
+      await git.commit(message)
+      callback({ success: true })
+    } catch (err) {
+      callback({ error: err.message })
+    }
+  })
+
+  socket.on('git:push', async (githubToken, callback) => {
+    console.log('[git:push] Called. Token present:', !!githubToken, '| Room:', currentRoom)
+    if (!currentRoom) return callback({ error: 'Not in a room' })
+    try {
+      const roomPath = path.join(WORKSPACE_DIR, currentRoom)
+      console.log('[git:push] Room path:', roomPath)
+      const git = simpleGit(roomPath)
+      const isRepo = await git.checkIsRepo('root')
+      console.log('[git:push] Is repo:', isRepo)
+      if (!isRepo) return callback({ error: 'Not a git repository.' })
+
+      await sanitizeRemoteUrl(git)
+      
+      const status = await git.status()
+      const branch = status.current || 'main'
+      console.log('[git:push] Branch:', branch, '| Modified files:', status.modified.length)
+
+      if (githubToken) {
+        const authBase64 = Buffer.from(`x-access-token:${githubToken}`).toString('base64')
+        console.log('[git:push] Pushing with auth header...')
+        const result = await git.raw([
+          '-c', 'credential.helper=',
+          '-c', `http.https://github.com/.extraheader=AUTHORIZATION: basic ${authBase64}`,
+          'push', 'origin', branch
+        ])
+        console.log('[git:push] Push result:', result)
+      } else {
+        console.log('[git:push] Pushing without auth...')
+        await git.push('origin', branch)
+      }
+
+      console.log('[git:push] Success!')
+      callback({ success: true })
+    } catch (err) {
+      console.error('[git:push] ERROR:', err.message)
+      callback({ error: err.message })
+    }
+  })
+
+  socket.on('git:pull', async (githubToken, callback) => {
+    if (!currentRoom) return callback({ error: 'Not in a room' })
+    try {
+      const roomPath = path.join(WORKSPACE_DIR, currentRoom)
+      const git = simpleGit(roomPath)
+      const isRepo = await git.checkIsRepo('root')
+      if (!isRepo) return callback({ error: 'Not a git repository.' })
+
+      await sanitizeRemoteUrl(git)
+
+      if (githubToken) {
+        const authBase64 = Buffer.from(`x-access-token:${githubToken}`).toString('base64')
+        await git.raw([
+          '-c', 'credential.helper=',
+          '-c', `http.https://github.com/.extraheader=AUTHORIZATION: basic ${authBase64}`,
+          'pull', 'origin'
+        ])
+      } else {
+        await git.pull()
+      }
+
+      await broadcastFileList(currentRoom)
+      callback({ success: true })
+    } catch (err) {
+      callback({ error: err.message })
+    }
+  })
+
+
 
   // == TERMINAL EVENTS ==
   socket.on('terminal:start', () => {
