@@ -12,6 +12,7 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
   const providerRef = useRef(null)
   const bindingRef = useRef(null)
   const [contentLoaded, setContentLoaded] = useState(false)
+  const [awarenessStyles, setAwarenessStyles] = useState('')
   const monaco = useMonaco()
 
   // Use a ref for onSave to avoid stale closure in Monaco commands
@@ -98,6 +99,58 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
     )
     bindingRef.current = binding
 
+    const updateStyles = () => {
+      let styles = ''
+      provider.awareness.getStates().forEach((state, clientID) => {
+        if (state.user && state.user.color) {
+          const color = state.user.color
+          const name = state.user.name || 'Anonymous'
+          
+          let bgColor = color
+          if (color.startsWith('#') && color.length === 7) {
+             bgColor = color + '40'
+          }
+          
+          styles += `
+            .yRemoteSelection-${clientID} {
+              background-color: ${bgColor} !important;
+              opacity: ${bgColor === color ? '0.4' : '1'};
+            }
+            .yRemoteSelectionHead-${clientID} {
+              position: absolute;
+              border-left: 2px solid ${color} !important;
+              box-sizing: border-box;
+              height: 100%;
+            }
+            .yRemoteSelectionHead-${clientID}::after {
+              position: absolute;
+              content: '${name}';
+              top: -16px;
+              left: -2px;
+              background-color: ${color};
+              color: white;
+              font-size: 10px;
+              font-family: sans-serif;
+              padding: 1px 4px;
+              border-radius: 4px 4px 4px 0;
+              white-space: nowrap;
+              opacity: 0;
+              transition: opacity 0.2s ease-in-out;
+              pointer-events: none;
+              z-index: 10;
+            }
+            .yRemoteSelectionHead-${clientID}:hover::after {
+              opacity: 1;
+            }
+          `
+        }
+      })
+      setAwarenessStyles(styles)
+    }
+
+    provider.awareness.on('change', updateStyles)
+    updateStyles()
+
     let isFirstLoad = true
     provider.on('sync', (isSynced) => {
       if (isSynced && isFirstLoad) {
@@ -157,6 +210,7 @@ export default function CodeEditor({ roomId, file, username, userColor, onSave, 
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', width: '100%', height: '100%' }}>
+      <style>{awarenessStyles}</style>
       {!contentLoaded && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 10, backgroundColor: 'rgba(10,10,20,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)' }}>
           Syncing...
