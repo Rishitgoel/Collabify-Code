@@ -17,6 +17,7 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
   const [roomUsers, setRoomUsers] = useState(initialUsers)
   const [savedToast, setSavedToast] = useState(null) // { name: string, isLocal: boolean }
   const [activeSidebarTab, setActiveSidebarTab] = useState('files')
+  const [terminalState, setTerminalState] = useState({ mode: 'shared', termId: null })
   
   const editorRef = useRef(null)
 
@@ -190,7 +191,7 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
       default: cmd = `echo "Auto-run not supported for .${ext} files"`; break
     }
     
-    socket.emit('terminal:input', cmd + '\r\n')
+    socket.emit('terminal:input', { type: terminalState.mode, termId: terminalState.termId, data: cmd + '\r\n' })
   }
 
   return (
@@ -357,7 +358,7 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
             <Panel id="terminal" order={2} defaultSize={30} minSize={10} style={{ backgroundColor: 'var(--bg-elevated)', borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column' }}>
               <div style={styles.panelHeader}>Terminal</div>
               <div style={{ flex: 1, padding: '0 1rem', overflow: 'hidden' }}>
-                <Terminal socket={socket} roomId={roomId} theme={theme} />
+                <Terminal socket={socket} roomId={roomId} theme={theme} terminalState={terminalState} setTerminalState={setTerminalState} roomUsers={roomUsers} />
               </div>
 
             </Panel>

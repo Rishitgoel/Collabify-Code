@@ -1,7 +1,7 @@
 import fs from 'fs-extra'
 import path from 'path'
 import { nanoid } from 'nanoid'
-import { rooms, ptys, chatHistory, userColors, WORKSPACE_DIR } from '../store/state.js'
+import { rooms, terminalRooms, chatHistory, userColors, WORKSPACE_DIR } from '../store/state.js'
 import { validateRoomId } from '../utils/validation.js'
 
 export default function registerRoomHandlers(io, socket) {
@@ -59,10 +59,18 @@ export default function registerRoomHandlers(io, socket) {
       if (chatHistory.has(roomId)) {
         chatHistory.delete(roomId)
       }
-      const ptyProcess = ptys.get(roomId)
-      if (ptyProcess) {
-        try { ptyProcess.kill() } catch (e) {}
-        ptys.delete(roomId)
+      const roomTerminals = terminalRooms.get(roomId)
+      if (roomTerminals) {
+        if (roomTerminals.sharedPty) {
+          try { roomTerminals.sharedPty.kill() } catch (e) {}
+        }
+        for (const [userId, userTermsMap] of roomTerminals.userTerminals.entries()) {
+          for (const [termId, termInfo] of userTermsMap.entries()) {
+             try { termInfo.pty.kill() } catch (e) {}
+             if (termInfo.disconnectTimeout) clearTimeout(termInfo.disconnectTimeout)
+          }
+        }
+        terminalRooms.delete(roomId)
       }
       
       if (callback) callback({ success: true })
@@ -111,10 +119,42 @@ function handleLeave(io, socket) {
       io.to(roomId).emit('room:users', Array.from(room.users.values()))
       
       if (room.users.size === 0) {
-        const ptyProcess = ptys.get(roomId)
-        if (ptyProcess) {
-          try { ptyProcess.kill() } catch (e) {}
-          ptys.delete(roomId)
+        const roomTerminals = terminalRooms.get(roomId)
+        if (roomTerminals) {
+          if (roomTerminals.sharedPty) {
+            try { roomTerminals.sharedPty.kill() } catch (e) {}
+          }
+          for (const [userId, userTermsMap] of roomTerminals.userTerminals.entries()) {
+            for (const [termId, termInfo] of userTermsMap.entries()) {
+               try { termInfo.pty.kill() } catch (e) {}
+               if (termInfo.disconnectTimeout) clearTimeout(termInfo.disconnectTimeout)
+            }
+          }
+          terminalRooms.delete(roomId)
+        }
+      } else {
+        const roomTerminals = terminalRooms.get(roomId)
+        if (roomTerminals) {
+          if (roomTerminals.currentController === socket.id) {
+            roomTerminals.currentController = roomTerminals.controlQueue.length > 0 ? roomTerminals.controlQueue.shift() : null
+            io.to(roomId).emit('terminal:control_updated', { currentController: roomTerminals.currentController, controlQueue: roomTerminals.controlQueue })
+          }
+          
+          roomTerminals.controlQueue = roomTerminals.controlQueue.filter(id => id !== socket.id)
+          io.to(roomId).emit('terminal:control_updated', { currentController: roomTerminals.currentController, controlQueue: roomTerminals.controlQueue })
+          
+          const userTermsMap = roomTerminals.userTerminals.get(socket.id)
+          if (userTermsMap) {
+            for (const [termId, termInfo] of userTermsMap.entries()) {
+               termInfo.disconnectTimeout = setTimeout(() => {
+                 try { termInfo.pty.kill() } catch (e) {}
+                 userTermsMap.delete(termId)
+                 if (userTermsMap.size === 0) {
+                   roomTerminals.userTerminals.delete(socket.id)
+                 }
+               }, 60000)
+            }
+          }
         }
       }
     }

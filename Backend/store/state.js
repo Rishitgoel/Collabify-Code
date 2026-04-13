@@ -6,7 +6,7 @@ const __dirname = path.dirname(__filename)
 
 // Shared state Maps
 export const rooms = new Map() // roomId -> { users: Map(socketId -> { username, color }) }
-export const ptys = new Map() // roomId -> pty process
+export const terminalRooms = new Map() // roomId -> { sharedPty, currentController, controlQueue, userTerminals: Map<userId, { pty, disconnectTimeout }> }
 export const chatHistory = new Map() // roomId -> [ { username, message, timestamp, color } ]
 
 // Constants
