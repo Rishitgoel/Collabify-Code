@@ -18,7 +18,6 @@ export default function EditorWorkspace({ roomId, username, initialUsers = [], o
   const [savedToast, setSavedToast] = useState(null) // { name: string, isLocal: boolean }
   const [activeSidebarTab, setActiveSidebarTab] = useState('files')
   
-  console.log('[DEBUG] EditorWorkspace mount. initialUsers:', initialUsers)
   const editorRef = useRef(null)
 
   // ... (rest of the hooks and handlers stay the same) ...

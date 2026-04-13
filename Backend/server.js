@@ -58,8 +58,6 @@ app.get('/auth/github/callback', async (req, res) => {
     const scope = data.scope
     const tokenType = data.token_type
     
-    console.log('[GitHub OAuth] Token received. Type:', tokenType, '| Scopes:', scope)
-
     if (token) {
       res.send(`
         <html>
@@ -215,12 +213,10 @@ io.on('connection', (socket) => {
     room.users.set(socket.id, currentUser)
     socket.join(roomId)
 
-    console.log(`User ${username} joined ${roomId}`)
 
     // Broadcast updated users
     io.to(roomId).emit('room:users', Array.from(room.users.values()))
     
-    console.log(`[Join] Users in room ${roomId}:`, Array.from(room.users.values()))
     callback({ 
       success: true, 
       roomId, 
@@ -252,7 +248,6 @@ io.on('connection', (socket) => {
         ptys.delete(roomId)
       }
       
-      console.log(`Room ${roomId} permanently deleted from disk and memory.`)
       if (callback) callback({ success: true })
     } catch (err) {
       console.error(`Error deleting room ${roomId}:`, err)
@@ -612,37 +607,29 @@ io.on('connection', (socket) => {
   })
 
   socket.on('git:push', async (githubToken, callback) => {
-    console.log('[git:push] Called. Token present:', !!githubToken, '| Room:', currentRoom)
     if (!currentRoom) return callback({ error: 'Not in a room' })
     try {
       const roomPath = path.join(WORKSPACE_DIR, currentRoom)
-      console.log('[git:push] Room path:', roomPath)
       const git = simpleGit(roomPath)
       const isRepo = await git.checkIsRepo('root')
-      console.log('[git:push] Is repo:', isRepo)
       if (!isRepo) return callback({ error: 'Not a git repository.' })
 
       await sanitizeRemoteUrl(git)
       
       const status = await git.status()
       const branch = status.current || 'main'
-      console.log('[git:push] Branch:', branch, '| Modified files:', status.modified.length)
 
       if (githubToken) {
         const authBase64 = Buffer.from(`x-access-token:${githubToken}`).toString('base64')
-        console.log('[git:push] Pushing with auth header...')
-        const result = await git.raw([
+        await git.raw([
           '-c', 'credential.helper=',
           '-c', `http.https://github.com/.extraheader=AUTHORIZATION: basic ${authBase64}`,
           'push', 'origin', branch
         ])
-        console.log('[git:push] Push result:', result)
       } else {
-        console.log('[git:push] Pushing without auth...')
         await git.push('origin', branch)
       }
 
-      console.log('[git:push] Success!')
       callback({ success: true })
     } catch (err) {
       console.error('[git:push] ERROR:', err.message)

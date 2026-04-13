@@ -52,14 +52,12 @@ function App() {
       if (savedSession) {
         try {
           const { roomId, username } = JSON.parse(savedSession)
-          console.log('[DEBUG] Attempting auto-rejoin:', { roomId, username })
           
           socket.emit('join-room', roomId, username, (res) => {
             if (res.success) {
-              console.log('[DEBUG] Auto-rejoin successful')
               handleJoinRoom(res.roomId, username, res.users)
             } else {
-              console.warn('[DEBUG] Auto-rejoin failed:', res.error)
+              console.warn('Auto-rejoin failed:', res.error)
               localStorage.removeItem('collabify_session')
             }
             setIsRestoring(false)
@@ -79,7 +77,6 @@ function App() {
   }, [isConnected])
 
   const handleJoinRoom = (roomId, username, users) => {
-    console.log('[DEBUG] App.handleJoinRoom:', { roomId, username, users })
     setRoomData({ roomId, username, initialUsers: users })
     localStorage.setItem('collabify_session', JSON.stringify({ roomId, username }))
     setCurrentView('WORKSPACE')
@@ -149,7 +146,6 @@ function App() {
                 GLOBAL_LOCAL_HANDLES.set(key, value)
               }
               setSyncCount(c => c + 1)
-              console.log('[DEBUG] App: Global handles updated, count:', GLOBAL_LOCAL_HANDLES.size)
             }}
           />
         )}
